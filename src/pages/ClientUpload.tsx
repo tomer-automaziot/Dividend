@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Typography,
   Card,
@@ -12,6 +12,7 @@ import {
   Tag,
   Collapse,
   Table,
+  Spin,
 } from "antd";
 import {
   UploadOutlined,
@@ -20,318 +21,562 @@ import {
   FileZipOutlined,
   FolderOutlined,
   BankOutlined,
-  CheckCircleOutlined,
   SwapOutlined,
+  SaveOutlined,
+  LinkOutlined,
 } from "@ant-design/icons";
-import type { UploadFile } from "antd";
 import { supabaseClient } from "../supabaseClient";
 
 const { Title, Paragraph, Text } = Typography;
 const { Panel } = Collapse;
 
-interface Company {
+interface StoredFile {
+  id: string;
   name: string;
-  files: UploadFile[];
+  storagePath?: string;
+}
+
+interface Company {
+  id?: string;
+  name: string;
+  files: StoredFile[];
+}
+
+interface FileRename {
+  id?: string;
+  originalName: string;
+  newName: string;
+  source: string; // "general" or company name
+  sourceFileId?: string;
 }
 
 export const ClientUploadPage = () => {
-  const [submitting, setSubmitting] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [submissionId, setSubmissionId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   // General files state
-  const [generalFileNames, setGeneralFileNames] = useState<string[]>([]);
+  const [generalFileNames, setGeneralFileNames] = useState<StoredFile[]>([]);
   const [newFileName, setNewFileName] = useState("");
-  const [generalFileUploads, setGeneralFileUploads] = useState<UploadFile[]>(
-    []
-  );
-
-  // File renames state (shared for step 3)
-  const [generalFileRenames, setGeneralFileRenames] = useState<
-    Record<string, string>
-  >({});
-  const [companyFileRenames, setCompanyFileRenames] = useState<
-    Record<string, Record<string, string>>
-  >({}); // companyName -> { originalName -> newName }
 
   // Companies state
   const [companies, setCompanies] = useState<Company[]>([]);
   const [newCompanyName, setNewCompanyName] = useState("");
 
-  // Zip file state
-  const [zipFiles, setZipFiles] = useState<UploadFile[]>([]);
+  // File renames state
+  const [fileRenames, setFileRenames] = useState<FileRename[]>([]);
 
-  // --- General Files ---
-  const addGeneralFile = () => {
-    if (!newFileName.trim()) return;
-    setGeneralFileNames([...generalFileNames, newFileName.trim()]);
-    setNewFileName("");
+  // Zip files state
+  const [zipFiles, setZipFiles] = useState<StoredFile[]>([]);
+
+  // Save timer ref for debounced rename saves
+  const renameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // --- Initialize or load session ---
+  useEffect(() => {
+    const init = async () => {
+      const params = new URLSearchParams(window.location.search);
+      const existingId = params.get("id");
+
+      if (existingId) {
+        await loadSession(existingId);
+      } else {
+        await createSession();
+      }
+      setLoading(false);
+    };
+    init();
+  }, []);
+
+  const createSession = async () => {
+    const { data, error } = await supabaseClient
+      .from("client_submissions")
+      .insert({ client_name: "client", status: "draft" })
+      .select()
+      .single();
+
+    if (error) {
+      message.error("שגיאה ביצירת הפגישה");
+      return;
+    }
+
+    setSubmissionId(data.id);
+    const newUrl = `${window.location.pathname}?id=${data.id}`;
+    window.history.replaceState({}, "", newUrl);
   };
 
-  const removeGeneralFile = (index: number) => {
-    const name = generalFileNames[index];
-    setGeneralFileNames(generalFileNames.filter((_, i) => i !== index));
-    const updated = { ...generalFileRenames };
-    delete updated[name];
-    setGeneralFileRenames(updated);
-  };
-
-  // --- Companies ---
-  const addCompany = () => {
-    if (!newCompanyName.trim()) return;
-    setCompanies([
-      ...companies,
-      { name: newCompanyName.trim(), files: [] },
-    ]);
-    setNewCompanyName("");
-  };
-
-  const removeCompany = (index: number) => {
-    const name = companies[index].name;
-    setCompanies(companies.filter((_, i) => i !== index));
-    const updated = { ...companyFileRenames };
-    delete updated[name];
-    setCompanyFileRenames(updated);
-  };
-
-  const updateCompanyFiles = (companyIndex: number, files: UploadFile[]) => {
-    const updated = [...companies];
-    updated[companyIndex].files = files;
-    setCompanies(updated);
-  };
-
-  // --- Rename handlers for step 3 ---
-  const updateGeneralFileRename = (originalName: string, newName: string) => {
-    setGeneralFileRenames({ ...generalFileRenames, [originalName]: newName });
-  };
-
-  const updateCompanyFileRename = (
-    companyName: string,
-    originalName: string,
-    newName: string
-  ) => {
-    setCompanyFileRenames({
-      ...companyFileRenames,
-      [companyName]: {
-        ...(companyFileRenames[companyName] || {}),
-        [originalName]: newName,
-      },
-    });
-  };
-
-  // --- Upload to Supabase Storage ---
-  const uploadFileToStorage = async (
-    file: File,
-    path: string
-  ): Promise<string> => {
-    const { data, error } = await supabaseClient.storage
-      .from("initial-files-upload")
-      .upload(path, file, { upsert: true });
-
-    if (error) throw error;
-    return data.path;
-  };
-
-  // --- Submit ---
-  const handleSubmit = async () => {
-    setSubmitting(true);
+  const loadSession = async (id: string) => {
     try {
-      // 1. Create submission
-      const { data: submission, error: subError } = await supabaseClient
+      // Load submission
+      const { data: sub, error: subErr } = await supabaseClient
         .from("client_submissions")
-        .insert({
-          client_name: "client",
-          status: "submitted",
-        })
         .select()
+        .eq("id", id)
         .single();
 
-      if (subError) throw subError;
-      const submissionId = submission.id;
+      if (subErr || !sub) {
+        message.error("לא נמצאה הגשה עם מזהה זה");
+        await createSession();
+        return;
+      }
 
-      // 2. Save general file names
-      for (const fileName of generalFileNames) {
-        const { data: gfRecord, error: gfError } = await supabaseClient
-          .from("general_files")
-          .insert({
-            submission_id: submissionId,
-            file_name: fileName,
-          })
-          .select()
-          .single();
+      setSubmissionId(id);
 
-        if (gfError) throw gfError;
+      // Load general files
+      const { data: gFiles } = await supabaseClient
+        .from("general_files")
+        .select()
+        .eq("submission_id", id);
 
-        // Save the file rename if specified
-        const newName = generalFileRenames[fileName];
-        if (gfRecord && newName) {
-          await supabaseClient.from("field_changes").insert({
-            submission_id: submissionId,
-            general_file_id: gfRecord.id,
-            original_field_name: fileName,
-            new_field_name: newName,
+      if (gFiles) {
+        setGeneralFileNames(
+          gFiles.map((f) => ({
+            id: f.id,
+            name: f.file_name,
+            storagePath: f.storage_path || undefined,
+          }))
+        );
+      }
+
+      // Load companies and their files
+      const { data: comps } = await supabaseClient
+        .from("companies")
+        .select()
+        .eq("submission_id", id);
+
+      if (comps) {
+        const loadedCompanies: Company[] = [];
+        for (const comp of comps) {
+          const { data: cFiles } = await supabaseClient
+            .from("company_files")
+            .select()
+            .eq("company_id", comp.id);
+
+          loadedCompanies.push({
+            id: comp.id,
+            name: comp.company_name,
+            files: (cFiles || []).map((f) => ({
+              id: f.id,
+              name: f.file_name,
+              storagePath: f.storage_path || undefined,
+            })),
           });
         }
+        setCompanies(loadedCompanies);
       }
 
-      // Upload general file examples
-      for (const file of generalFileUploads) {
-        if (file.originFileObj) {
-          const path = `${submissionId}/general/${file.name}`;
-          const storagePath = await uploadFileToStorage(
-            file.originFileObj,
-            path
-          );
-          await supabaseClient.from("general_files").insert({
-            submission_id: submissionId,
-            file_name: file.name,
-            storage_path: storagePath,
-          });
-        }
+      // Load file renames
+      const { data: renames } = await supabaseClient
+        .from("field_changes")
+        .select()
+        .eq("submission_id", id);
+
+      if (renames) {
+        const loadedRenames: FileRename[] = renames.map((r) => ({
+          id: r.id,
+          originalName: r.original_field_name,
+          newName: r.new_field_name,
+          source: r.general_file_id ? "general" : "company",
+          sourceFileId: r.general_file_id || r.company_file_id,
+        }));
+        setFileRenames(loadedRenames);
       }
 
-      // 3. Companies and their files
-      for (const company of companies) {
-        const { data: companyRecord, error: compError } = await supabaseClient
-          .from("companies")
-          .insert({
-            submission_id: submissionId,
-            company_name: company.name,
-          })
-          .select()
-          .single();
+      // Load zip files
+      const { data: zips } = await supabaseClient
+        .from("zip_examples")
+        .select()
+        .eq("submission_id", id);
 
-        if (compError) throw compError;
-
-        // Upload company files
-        for (const file of company.files) {
-          if (file.originFileObj) {
-            const path = `${submissionId}/companies/${company.name}/${file.name}`;
-            const storagePath = await uploadFileToStorage(
-              file.originFileObj,
-              path
-            );
-
-            const { data: cfRecord } = await supabaseClient
-              .from("company_files")
-              .insert({
-                company_id: companyRecord.id,
-                submission_id: submissionId,
-                file_name: file.name,
-                storage_path: storagePath,
-              })
-              .select()
-              .single();
-
-            // Save file rename if specified
-            const renames = companyFileRenames[company.name] || {};
-            const newName = renames[file.name];
-            if (cfRecord && newName) {
-              await supabaseClient.from("field_changes").insert({
-                submission_id: submissionId,
-                company_file_id: cfRecord.id,
-                original_field_name: file.name,
-                new_field_name: newName,
-              });
-            }
-          }
-        }
+      if (zips) {
+        setZipFiles(
+          zips.map((z) => ({
+            id: z.id,
+            name: z.file_name,
+            storagePath: z.storage_path,
+          }))
+        );
       }
-
-      // 4. Zip file
-      for (const file of zipFiles) {
-        if (file.originFileObj) {
-          const path = `${submissionId}/zip/${file.name}`;
-          const storagePath = await uploadFileToStorage(
-            file.originFileObj,
-            path
-          );
-          await supabaseClient.from("zip_examples").insert({
-            submission_id: submissionId,
-            file_name: file.name,
-            storage_path: storagePath,
-          });
-        }
-      }
-
-      setSubmitted(true);
-      message.success("הנתונים נשלחו בהצלחה!");
-    } catch (error: unknown) {
-      console.error("Submission error:", error);
-      const errMsg =
-        error instanceof Error ? error.message : "שגיאה לא ידועה";
-      message.error(`השליחה נכשלה: ${errMsg}`);
-    } finally {
-      setSubmitting(false);
+    } catch {
+      message.error("שגיאה בטעינת הנתונים");
     }
   };
 
-  if (submitted) {
-    return (
-      <div style={{ maxWidth: 800, margin: "40px auto", padding: "0 24px" }}>
-        <Card>
-          <div style={{ textAlign: "center", padding: "40px 0" }}>
-            <CheckCircleOutlined
-              style={{ fontSize: 64, color: "#52c41a", marginBottom: 24 }}
-            />
-            <Title level={2}>תודה רבה!</Title>
-            <Paragraph style={{ fontSize: 16 }}>
-              הנתונים שלך נשלחו בהצלחה. הצוות שלנו יבדוק את הקבצים ויחזור אליך
-              בהקדם.
-            </Paragraph>
-            <Button type="primary" onClick={() => window.location.reload()}>
-              שליחה נוספת
-            </Button>
-          </div>
-        </Card>
-      </div>
-    );
-  }
+  // --- General Files ---
+  const addGeneralFile = async () => {
+    if (!newFileName.trim() || !submissionId) return;
+    const name = newFileName.trim();
 
-  // Build file rename summary data for section 3
-  const allFileRenames: {
+    const { data, error } = await supabaseClient
+      .from("general_files")
+      .insert({ submission_id: submissionId, file_name: name })
+      .select()
+      .single();
+
+    if (error) {
+      message.error("שגיאה בהוספת קובץ");
+      return;
+    }
+
+    setGeneralFileNames([
+      ...generalFileNames,
+      { id: data.id, name },
+    ]);
+    setNewFileName("");
+  };
+
+  const removeGeneralFile = async (index: number) => {
+    const file = generalFileNames[index];
+    if (file.id) {
+      await supabaseClient.from("general_files").delete().eq("id", file.id);
+      // Also remove related renames
+      await supabaseClient
+        .from("field_changes")
+        .delete()
+        .eq("general_file_id", file.id);
+    }
+    setGeneralFileNames(generalFileNames.filter((_, i) => i !== index));
+    setFileRenames(fileRenames.filter((r) => r.sourceFileId !== file.id));
+  };
+
+  const handleGeneralFileUpload = async (file: File) => {
+    if (!submissionId) return false;
+
+    const path = `${submissionId}/general/${file.name}`;
+    const { data: uploadData, error: uploadError } = await supabaseClient.storage
+      .from("initial-files-upload")
+      .upload(path, file, { upsert: true });
+
+    if (uploadError) {
+      message.error(`שגיאה בהעלאת ${file.name}`);
+      return false;
+    }
+
+    const { data, error } = await supabaseClient
+      .from("general_files")
+      .insert({
+        submission_id: submissionId,
+        file_name: file.name,
+        storage_path: uploadData.path,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      message.error("שגיאה בשמירת הקובץ");
+      return false;
+    }
+
+    setGeneralFileNames((prev) => [
+      ...prev,
+      { id: data.id, name: file.name, storagePath: uploadData.path },
+    ]);
+    message.success(`${file.name} הועלה בהצלחה`);
+    return false; // prevent default upload behavior
+  };
+
+  // --- Companies ---
+  const addCompany = async () => {
+    if (!newCompanyName.trim() || !submissionId) return;
+    const name = newCompanyName.trim();
+
+    const { data, error } = await supabaseClient
+      .from("companies")
+      .insert({ submission_id: submissionId, company_name: name })
+      .select()
+      .single();
+
+    if (error) {
+      message.error("שגיאה בהוספת חברה");
+      return;
+    }
+
+    setCompanies([...companies, { id: data.id, name, files: [] }]);
+    setNewCompanyName("");
+  };
+
+  const removeCompany = async (index: number) => {
+    const company = companies[index];
+    if (company.id) {
+      // Delete company files from storage
+      for (const f of company.files) {
+        if (f.storagePath) {
+          await supabaseClient.storage
+            .from("initial-files-upload")
+            .remove([f.storagePath]);
+        }
+      }
+      await supabaseClient.from("companies").delete().eq("id", company.id);
+    }
+    setCompanies(companies.filter((_, i) => i !== index));
+    setFileRenames(
+      fileRenames.filter(
+        (r) => !company.files.some((f) => f.id === r.sourceFileId)
+      )
+    );
+  };
+
+  const handleCompanyFileUpload = async (companyIndex: number, file: File) => {
+    const company = companies[companyIndex];
+    if (!submissionId || !company.id) return false;
+
+    const path = `${submissionId}/companies/${company.name}/${file.name}`;
+    const { data: uploadData, error: uploadError } = await supabaseClient.storage
+      .from("initial-files-upload")
+      .upload(path, file, { upsert: true });
+
+    if (uploadError) {
+      message.error(`שגיאה בהעלאת ${file.name}`);
+      return false;
+    }
+
+    const { data, error } = await supabaseClient
+      .from("company_files")
+      .insert({
+        company_id: company.id,
+        submission_id: submissionId,
+        file_name: file.name,
+        storage_path: uploadData.path,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      message.error("שגיאה בשמירת הקובץ");
+      return false;
+    }
+
+    setCompanies((prev) => {
+      const updated = [...prev];
+      updated[companyIndex] = {
+        ...updated[companyIndex],
+        files: [
+          ...updated[companyIndex].files,
+          { id: data.id, name: file.name, storagePath: uploadData.path },
+        ],
+      };
+      return updated;
+    });
+    message.success(`${file.name} הועלה בהצלחה`);
+    return false;
+  };
+
+  const removeCompanyFile = async (companyIndex: number, fileIndex: number) => {
+    const file = companies[companyIndex].files[fileIndex];
+    if (file.id) {
+      await supabaseClient.from("company_files").delete().eq("id", file.id);
+      await supabaseClient
+        .from("field_changes")
+        .delete()
+        .eq("company_file_id", file.id);
+    }
+    if (file.storagePath) {
+      await supabaseClient.storage
+        .from("initial-files-upload")
+        .remove([file.storagePath]);
+    }
+    setCompanies((prev) => {
+      const updated = [...prev];
+      updated[companyIndex] = {
+        ...updated[companyIndex],
+        files: updated[companyIndex].files.filter((_, i) => i !== fileIndex),
+      };
+      return updated;
+    });
+    setFileRenames(fileRenames.filter((r) => r.sourceFileId !== file.id));
+  };
+
+  // --- File Renames (step 3) ---
+  const updateFileRename = useCallback(
+    async (sourceFileId: string, newName: string, isGeneral: boolean) => {
+      if (!submissionId) return;
+
+      setFileRenames((prev) => {
+        const existing = prev.find((r) => r.sourceFileId === sourceFileId);
+        if (existing) {
+          return prev.map((r) =>
+            r.sourceFileId === sourceFileId ? { ...r, newName } : r
+          );
+        }
+        return [
+          ...prev,
+          {
+            originalName: "",
+            newName,
+            source: isGeneral ? "general" : "company",
+            sourceFileId,
+          },
+        ];
+      });
+
+      // Debounce the DB save
+      if (renameTimerRef.current) clearTimeout(renameTimerRef.current);
+      renameTimerRef.current = setTimeout(async () => {
+        setSaving(true);
+        try {
+          // Check if rename record exists
+          const filterCol = isGeneral ? "general_file_id" : "company_file_id";
+          const { data: existing } = await supabaseClient
+            .from("field_changes")
+            .select()
+            .eq(filterCol, sourceFileId)
+            .eq("submission_id", submissionId);
+
+          // Get original file name
+          let originalName = "";
+          if (isGeneral) {
+            const { data: f } = await supabaseClient
+              .from("general_files")
+              .select("file_name")
+              .eq("id", sourceFileId)
+              .single();
+            originalName = f?.file_name || "";
+          } else {
+            const { data: f } = await supabaseClient
+              .from("company_files")
+              .select("file_name")
+              .eq("id", sourceFileId)
+              .single();
+            originalName = f?.file_name || "";
+          }
+
+          if (existing && existing.length > 0) {
+            if (newName) {
+              await supabaseClient
+                .from("field_changes")
+                .update({
+                  original_field_name: originalName,
+                  new_field_name: newName,
+                })
+                .eq("id", existing[0].id);
+            } else {
+              await supabaseClient
+                .from("field_changes")
+                .delete()
+                .eq("id", existing[0].id);
+            }
+          } else if (newName) {
+            await supabaseClient.from("field_changes").insert({
+              submission_id: submissionId,
+              [filterCol]: sourceFileId,
+              original_field_name: originalName,
+              new_field_name: newName,
+            });
+          }
+        } catch {
+          message.error("שגיאה בשמירת שינוי שם");
+        }
+        setSaving(false);
+      }, 800);
+    },
+    [submissionId]
+  );
+
+  // --- Zip files ---
+  const handleZipUpload = async (file: File) => {
+    if (!submissionId) return false;
+
+    const path = `${submissionId}/zip/${file.name}`;
+    const { data: uploadData, error: uploadError } = await supabaseClient.storage
+      .from("initial-files-upload")
+      .upload(path, file, { upsert: true });
+
+    if (uploadError) {
+      message.error(`שגיאה בהעלאת ${file.name}`);
+      return false;
+    }
+
+    const { data, error } = await supabaseClient
+      .from("zip_examples")
+      .insert({
+        submission_id: submissionId,
+        file_name: file.name,
+        storage_path: uploadData.path,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      message.error("שגיאה בשמירת קובץ ZIP");
+      return false;
+    }
+
+    setZipFiles((prev) => [
+      ...prev,
+      { id: data.id, name: file.name, storagePath: uploadData.path },
+    ]);
+    message.success(`${file.name} הועלה בהצלחה`);
+    return false;
+  };
+
+  const removeZipFile = async (index: number) => {
+    const file = zipFiles[index];
+    if (file.id) {
+      await supabaseClient.from("zip_examples").delete().eq("id", file.id);
+    }
+    if (file.storagePath) {
+      await supabaseClient.storage
+        .from("initial-files-upload")
+        .remove([file.storagePath]);
+    }
+    setZipFiles(zipFiles.filter((_, i) => i !== index));
+  };
+
+  const copyLink = () => {
+    navigator.clipboard.writeText(window.location.href);
+    message.success("הקישור הועתק!");
+  };
+
+  // Build rename table data
+  const renameTableData: {
     key: string;
     source: string;
     originalName: string;
     newName: string;
-    onNewNameChange: (val: string) => void;
+    fileId: string;
+    isGeneral: boolean;
   }[] = [];
 
-  generalFileNames.forEach((name, idx) => {
-    allFileRenames.push({
-      key: `general-listed-${idx}`,
+  generalFileNames.forEach((file) => {
+    const rename = fileRenames.find((r) => r.sourceFileId === file.id);
+    renameTableData.push({
+      key: `general-${file.id}`,
       source: "תיקייה כללית",
-      originalName: name,
-      newName: generalFileRenames[name] || "",
-      onNewNameChange: (val) => updateGeneralFileRename(name, val),
+      originalName: file.name,
+      newName: rename?.newName || "",
+      fileId: file.id!,
+      isGeneral: true,
     });
-  });
-
-  generalFileUploads.forEach((file) => {
-    // Avoid duplicates if already listed manually
-    if (!generalFileNames.includes(file.name)) {
-      allFileRenames.push({
-        key: `general-uploaded-${file.uid}`,
-        source: "תיקייה כללית",
-        originalName: file.name,
-        newName: generalFileRenames[file.name] || "",
-        onNewNameChange: (val) => updateGeneralFileRename(file.name, val),
-      });
-    }
   });
 
   companies.forEach((company) => {
     company.files.forEach((file) => {
-      const renames = companyFileRenames[company.name] || {};
-      allFileRenames.push({
-        key: `company-${company.name}-${file.uid}`,
+      const rename = fileRenames.find((r) => r.sourceFileId === file.id);
+      renameTableData.push({
+        key: `company-${file.id}`,
         source: company.name,
         originalName: file.name,
-        newName: renames[file.name] || "",
-        onNewNameChange: (val) =>
-          updateCompanyFileRename(company.name, file.name, val),
+        newName: rename?.newName || "",
+        fileId: file.id!,
+        isGeneral: false,
       });
     });
   });
+
+  if (loading) {
+    return (
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+          minHeight: "100vh",
+        }}
+      >
+        <Spin size="large" tip="טוען..." />
+      </div>
+    );
+  }
 
   return (
     <div style={{ maxWidth: 900, margin: "40px auto", padding: "0 24px" }}>
@@ -343,11 +588,33 @@ export const ClientUploadPage = () => {
           textAlign: "center",
           fontSize: 16,
           color: "#666",
-          marginBottom: 40,
+          marginBottom: 16,
         }}
       >
         אנא העלה את הקבצים והנתונים שלך כדי שנוכל להגדיר את האוטומציה עבורך.
       </Paragraph>
+
+      {/* Share link */}
+      <div style={{ textAlign: "center", marginBottom: 32 }}>
+        <Button icon={<LinkOutlined />} onClick={copyLink} type="dashed">
+          העתק קישור לדף זה
+        </Button>
+        {saving && (
+          <Tag
+            icon={<SaveOutlined spin />}
+            color="processing"
+            style={{ marginRight: 8 }}
+          >
+            שומר...
+          </Tag>
+        )}
+        <Paragraph
+          type="secondary"
+          style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}
+        >
+          כל שינוי נשמר אוטומטית. שתף את הקישור כדי שאחרים יוכלו לצפות בדף זה.
+        </Paragraph>
+      </div>
 
       {/* הוראות */}
       <Alert
@@ -398,7 +665,6 @@ export const ClientUploadPage = () => {
           style={{ marginBottom: 16 }}
         />
 
-        {/* רשימת שמות קבצים */}
         <div style={{ marginBottom: 16 }}>
           <Text strong>שמות קבצים:</Text>
           <div style={{ marginTop: 8 }}>
@@ -421,15 +687,19 @@ export const ClientUploadPage = () => {
 
           {generalFileNames.length > 0 && (
             <div style={{ marginTop: 12 }}>
-              {generalFileNames.map((name, index) => (
+              {generalFileNames.map((file, index) => (
                 <Tag
-                  key={index}
+                  key={file.id || index}
                   closable
                   onClose={() => removeGeneralFile(index)}
-                  color="blue"
-                  style={{ marginBottom: 8, fontSize: 14, padding: "4px 10px" }}
+                  color={file.storagePath ? "green" : "blue"}
+                  style={{
+                    marginBottom: 8,
+                    fontSize: 14,
+                    padding: "4px 10px",
+                  }}
                 >
-                  {name}
+                  {file.storagePath && <UploadOutlined />} {file.name}
                 </Tag>
               ))}
             </div>
@@ -438,15 +708,16 @@ export const ClientUploadPage = () => {
 
         <Divider />
 
-        {/* העלאת קבצים כלליים */}
         <div>
           <Text strong>העלאת קבצים לדוגמה עבור התיקייה הכללית:</Text>
           <div style={{ marginTop: 8 }}>
             <Upload
               multiple
-              beforeUpload={() => false}
-              fileList={generalFileUploads}
-              onChange={({ fileList }) => setGeneralFileUploads(fileList)}
+              beforeUpload={(file) => {
+                handleGeneralFileUpload(file);
+                return false;
+              }}
+              showUploadList={false}
             >
               <Button icon={<UploadOutlined />}>לחץ לבחירת קבצים</Button>
             </Upload>
@@ -496,7 +767,7 @@ export const ClientUploadPage = () => {
         <Collapse accordion>
           {companies.map((company, companyIndex) => (
             <Panel
-              key={companyIndex}
+              key={company.id || companyIndex}
               header={
                 <Space>
                   <BankOutlined />
@@ -519,14 +790,34 @@ export const ClientUploadPage = () => {
               </Text>
               <Upload
                 multiple
-                beforeUpload={() => false}
-                fileList={company.files}
-                onChange={({ fileList }) =>
-                  updateCompanyFiles(companyIndex, fileList)
-                }
+                beforeUpload={(file) => {
+                  handleCompanyFileUpload(companyIndex, file);
+                  return false;
+                }}
+                showUploadList={false}
               >
                 <Button icon={<UploadOutlined />}>לחץ לבחירת קבצים</Button>
               </Upload>
+
+              {company.files.length > 0 && (
+                <div style={{ marginTop: 12 }}>
+                  {company.files.map((file, fileIndex) => (
+                    <Tag
+                      key={file.id || fileIndex}
+                      closable
+                      onClose={() => removeCompanyFile(companyIndex, fileIndex)}
+                      color="green"
+                      style={{
+                        marginBottom: 8,
+                        fontSize: 14,
+                        padding: "4px 10px",
+                      }}
+                    >
+                      <UploadOutlined /> {file.name}
+                    </Tag>
+                  ))}
+                </div>
+              )}
             </Panel>
           ))}
         </Collapse>
@@ -547,14 +838,14 @@ export const ClientUploadPage = () => {
           style={{ marginBottom: 16 }}
         />
 
-        {allFileRenames.length === 0 ? (
+        {renameTableData.length === 0 ? (
           <Paragraph type="secondary" style={{ textAlign: "center" }}>
             עדיין לא נוספו קבצים. הוסף קבצים בסעיפים 1 ו-2 כדי לראות אותם
             כאן.
           </Paragraph>
         ) : (
           <Table
-            dataSource={allFileRenames}
+            dataSource={renameTableData}
             pagination={false}
             size="middle"
             columns={[
@@ -579,12 +870,18 @@ export const ClientUploadPage = () => {
                 dataIndex: "newName",
                 render: (
                   text: string,
-                  record: (typeof allFileRenames)[number]
+                  record: (typeof renameTableData)[number]
                 ) => (
                   <Input
                     placeholder="הזן שם קובץ חדש"
                     value={text}
-                    onChange={(e) => record.onNewNameChange(e.target.value)}
+                    onChange={(e) =>
+                      updateFileRename(
+                        record.fileId,
+                        e.target.value,
+                        record.isGeneral
+                      )
+                    }
                   />
                 ),
               },
@@ -609,34 +906,37 @@ export const ClientUploadPage = () => {
         />
 
         <Upload
-          beforeUpload={() => false}
-          fileList={zipFiles}
-          onChange={({ fileList }) => setZipFiles(fileList)}
+          beforeUpload={(file) => {
+            handleZipUpload(file);
+            return false;
+          }}
+          showUploadList={false}
           accept=".zip,.rar,.7z"
         >
           <Button icon={<UploadOutlined />} size="large">
             לחץ להעלאת קובץ ZIP
           </Button>
         </Upload>
-      </Card>
 
-      {/* שליחה */}
-      <Card>
-        <div style={{ textAlign: "center" }}>
-          <Paragraph type="secondary">
-            אנא בדוק את כל הסעיפים למעלה לפני השליחה. ודא שרשמת את כל שמות
-            הקבצים, העלית קבצים לדוגמה, וציינת שמות קבצים חדשים.
-          </Paragraph>
-          <Button
-            type="primary"
-            size="large"
-            onClick={handleSubmit}
-            loading={submitting}
-            style={{ minWidth: 200, height: 48, fontSize: 16 }}
-          >
-            שלח את כל הנתונים
-          </Button>
-        </div>
+        {zipFiles.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            {zipFiles.map((file, index) => (
+              <Tag
+                key={file.id || index}
+                closable
+                onClose={() => removeZipFile(index)}
+                color="green"
+                style={{
+                  marginBottom: 8,
+                  fontSize: 14,
+                  padding: "4px 10px",
+                }}
+              >
+                <FileZipOutlined /> {file.name}
+              </Tag>
+            ))}
+          </div>
+        )}
       </Card>
 
       <div
