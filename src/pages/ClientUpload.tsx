@@ -23,12 +23,14 @@ import {
   BankOutlined,
   SwapOutlined,
   SaveOutlined,
-  LinkOutlined,
 } from "@ant-design/icons";
 import { supabaseClient } from "../supabaseClient";
 
 const { Title, Paragraph, Text } = Typography;
 const { Panel } = Collapse;
+
+// Single fixed submission ID - no sessions needed
+const FIXED_SUBMISSION_ID = "fdcdfcd9-4147-4687-b07b-99d100df9d70";
 
 interface StoredFile {
   id: string;
@@ -46,13 +48,12 @@ interface FileRename {
   id?: string;
   originalName: string;
   newName: string;
-  source: string; // "general" or company name
+  source: string;
   sourceFileId?: string;
 }
 
 export const ClientUploadPage = () => {
   const [loading, setLoading] = useState(true);
-  const [submissionId, setSubmissionId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   // General files state
@@ -72,61 +73,40 @@ export const ClientUploadPage = () => {
   // Save timer ref for debounced rename saves
   const renameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // --- Initialize or load session ---
+  // --- Load data on mount ---
   useEffect(() => {
     const init = async () => {
-      const params = new URLSearchParams(window.location.search);
-      const existingId = params.get("id");
-
-      if (existingId) {
-        await loadSession(existingId);
-      } else {
-        await createSession();
-      }
+      await ensureSubmissionExists();
+      await loadData();
       setLoading(false);
     };
     init();
   }, []);
 
-  const createSession = async () => {
-    const { data, error } = await supabaseClient
+  const ensureSubmissionExists = async () => {
+    const { data } = await supabaseClient
       .from("client_submissions")
-      .insert({ client_name: "client", status: "draft" })
-      .select()
+      .select("id")
+      .eq("id", FIXED_SUBMISSION_ID)
       .single();
 
-    if (error) {
-      message.error("שגיאה ביצירת הפגישה");
-      return;
+    if (!data) {
+      await supabaseClient.from("client_submissions").insert({
+        id: FIXED_SUBMISSION_ID,
+        client_name: "client",
+        status: "active",
+      });
     }
-
-    setSubmissionId(data.id);
-    const newUrl = `${window.location.pathname}?id=${data.id}`;
-    window.history.replaceState({}, "", newUrl);
   };
 
-  const loadSession = async (id: string) => {
+  const loadData = async () => {
     try {
-      // Load submission
-      const { data: sub, error: subErr } = await supabaseClient
-        .from("client_submissions")
-        .select()
-        .eq("id", id)
-        .single();
-
-      if (subErr || !sub) {
-        message.error("לא נמצאה הגשה עם מזהה זה");
-        await createSession();
-        return;
-      }
-
-      setSubmissionId(id);
-
       // Load general files
       const { data: gFiles } = await supabaseClient
         .from("general_files")
         .select()
-        .eq("submission_id", id);
+        .eq("submission_id", FIXED_SUBMISSION_ID)
+        .order("created_at");
 
       if (gFiles) {
         setGeneralFileNames(
@@ -142,7 +122,8 @@ export const ClientUploadPage = () => {
       const { data: comps } = await supabaseClient
         .from("companies")
         .select()
-        .eq("submission_id", id);
+        .eq("submission_id", FIXED_SUBMISSION_ID)
+        .order("created_at");
 
       if (comps) {
         const loadedCompanies: Company[] = [];
@@ -150,7 +131,8 @@ export const ClientUploadPage = () => {
           const { data: cFiles } = await supabaseClient
             .from("company_files")
             .select()
-            .eq("company_id", comp.id);
+            .eq("company_id", comp.id)
+            .order("created_at");
 
           loadedCompanies.push({
             id: comp.id,
@@ -169,24 +151,26 @@ export const ClientUploadPage = () => {
       const { data: renames } = await supabaseClient
         .from("field_changes")
         .select()
-        .eq("submission_id", id);
+        .eq("submission_id", FIXED_SUBMISSION_ID);
 
       if (renames) {
-        const loadedRenames: FileRename[] = renames.map((r) => ({
-          id: r.id,
-          originalName: r.original_field_name,
-          newName: r.new_field_name,
-          source: r.general_file_id ? "general" : "company",
-          sourceFileId: r.general_file_id || r.company_file_id,
-        }));
-        setFileRenames(loadedRenames);
+        setFileRenames(
+          renames.map((r) => ({
+            id: r.id,
+            originalName: r.original_field_name,
+            newName: r.new_field_name,
+            source: r.general_file_id ? "general" : "company",
+            sourceFileId: r.general_file_id || r.company_file_id,
+          }))
+        );
       }
 
       // Load zip files
       const { data: zips } = await supabaseClient
         .from("zip_examples")
         .select()
-        .eq("submission_id", id);
+        .eq("submission_id", FIXED_SUBMISSION_ID)
+        .order("created_at");
 
       if (zips) {
         setZipFiles(
@@ -204,12 +188,12 @@ export const ClientUploadPage = () => {
 
   // --- General Files ---
   const addGeneralFile = async () => {
-    if (!newFileName.trim() || !submissionId) return;
+    if (!newFileName.trim()) return;
     const name = newFileName.trim();
 
     const { data, error } = await supabaseClient
       .from("general_files")
-      .insert({ submission_id: submissionId, file_name: name })
+      .insert({ submission_id: FIXED_SUBMISSION_ID, file_name: name })
       .select()
       .single();
 
@@ -218,10 +202,7 @@ export const ClientUploadPage = () => {
       return;
     }
 
-    setGeneralFileNames([
-      ...generalFileNames,
-      { id: data.id, name },
-    ]);
+    setGeneralFileNames([...generalFileNames, { id: data.id, name }]);
     setNewFileName("");
   };
 
@@ -229,23 +210,26 @@ export const ClientUploadPage = () => {
     const file = generalFileNames[index];
     if (file.id) {
       await supabaseClient.from("general_files").delete().eq("id", file.id);
-      // Also remove related renames
       await supabaseClient
         .from("field_changes")
         .delete()
         .eq("general_file_id", file.id);
+    }
+    if (file.storagePath) {
+      await supabaseClient.storage
+        .from("initial-files-upload")
+        .remove([file.storagePath]);
     }
     setGeneralFileNames(generalFileNames.filter((_, i) => i !== index));
     setFileRenames(fileRenames.filter((r) => r.sourceFileId !== file.id));
   };
 
   const handleGeneralFileUpload = async (file: File) => {
-    if (!submissionId) return false;
-
-    const path = `${submissionId}/general/${file.name}`;
-    const { data: uploadData, error: uploadError } = await supabaseClient.storage
-      .from("initial-files-upload")
-      .upload(path, file, { upsert: true });
+    const path = `general/${file.name}`;
+    const { data: uploadData, error: uploadError } =
+      await supabaseClient.storage
+        .from("initial-files-upload")
+        .upload(path, file, { upsert: true });
 
     if (uploadError) {
       message.error(`שגיאה בהעלאת ${file.name}`);
@@ -255,7 +239,7 @@ export const ClientUploadPage = () => {
     const { data, error } = await supabaseClient
       .from("general_files")
       .insert({
-        submission_id: submissionId,
+        submission_id: FIXED_SUBMISSION_ID,
         file_name: file.name,
         storage_path: uploadData.path,
       })
@@ -272,17 +256,17 @@ export const ClientUploadPage = () => {
       { id: data.id, name: file.name, storagePath: uploadData.path },
     ]);
     message.success(`${file.name} הועלה בהצלחה`);
-    return false; // prevent default upload behavior
+    return false;
   };
 
   // --- Companies ---
   const addCompany = async () => {
-    if (!newCompanyName.trim() || !submissionId) return;
+    if (!newCompanyName.trim()) return;
     const name = newCompanyName.trim();
 
     const { data, error } = await supabaseClient
       .from("companies")
-      .insert({ submission_id: submissionId, company_name: name })
+      .insert({ submission_id: FIXED_SUBMISSION_ID, company_name: name })
       .select()
       .single();
 
@@ -298,7 +282,6 @@ export const ClientUploadPage = () => {
   const removeCompany = async (index: number) => {
     const company = companies[index];
     if (company.id) {
-      // Delete company files from storage
       for (const f of company.files) {
         if (f.storagePath) {
           await supabaseClient.storage
@@ -318,12 +301,13 @@ export const ClientUploadPage = () => {
 
   const handleCompanyFileUpload = async (companyIndex: number, file: File) => {
     const company = companies[companyIndex];
-    if (!submissionId || !company.id) return false;
+    if (!company.id) return false;
 
-    const path = `${submissionId}/companies/${company.name}/${file.name}`;
-    const { data: uploadData, error: uploadError } = await supabaseClient.storage
-      .from("initial-files-upload")
-      .upload(path, file, { upsert: true });
+    const path = `companies/${company.name}/${file.name}`;
+    const { data: uploadData, error: uploadError } =
+      await supabaseClient.storage
+        .from("initial-files-upload")
+        .upload(path, file, { upsert: true });
 
     if (uploadError) {
       message.error(`שגיאה בהעלאת ${file.name}`);
@@ -334,7 +318,7 @@ export const ClientUploadPage = () => {
       .from("company_files")
       .insert({
         company_id: company.id,
-        submission_id: submissionId,
+        submission_id: FIXED_SUBMISSION_ID,
         file_name: file.name,
         storage_path: uploadData.path,
       })
@@ -389,8 +373,6 @@ export const ClientUploadPage = () => {
   // --- File Renames (step 3) ---
   const updateFileRename = useCallback(
     async (sourceFileId: string, newName: string, isGeneral: boolean) => {
-      if (!submissionId) return;
-
       setFileRenames((prev) => {
         const existing = prev.find((r) => r.sourceFileId === sourceFileId);
         if (existing) {
@@ -409,20 +391,17 @@ export const ClientUploadPage = () => {
         ];
       });
 
-      // Debounce the DB save
       if (renameTimerRef.current) clearTimeout(renameTimerRef.current);
       renameTimerRef.current = setTimeout(async () => {
         setSaving(true);
         try {
-          // Check if rename record exists
           const filterCol = isGeneral ? "general_file_id" : "company_file_id";
           const { data: existing } = await supabaseClient
             .from("field_changes")
             .select()
             .eq(filterCol, sourceFileId)
-            .eq("submission_id", submissionId);
+            .eq("submission_id", FIXED_SUBMISSION_ID);
 
-          // Get original file name
           let originalName = "";
           if (isGeneral) {
             const { data: f } = await supabaseClient
@@ -457,7 +436,7 @@ export const ClientUploadPage = () => {
             }
           } else if (newName) {
             await supabaseClient.from("field_changes").insert({
-              submission_id: submissionId,
+              submission_id: FIXED_SUBMISSION_ID,
               [filterCol]: sourceFileId,
               original_field_name: originalName,
               new_field_name: newName,
@@ -469,17 +448,16 @@ export const ClientUploadPage = () => {
         setSaving(false);
       }, 800);
     },
-    [submissionId]
+    []
   );
 
   // --- Zip files ---
   const handleZipUpload = async (file: File) => {
-    if (!submissionId) return false;
-
-    const path = `${submissionId}/zip/${file.name}`;
-    const { data: uploadData, error: uploadError } = await supabaseClient.storage
-      .from("initial-files-upload")
-      .upload(path, file, { upsert: true });
+    const path = `zip/${file.name}`;
+    const { data: uploadData, error: uploadError } =
+      await supabaseClient.storage
+        .from("initial-files-upload")
+        .upload(path, file, { upsert: true });
 
     if (uploadError) {
       message.error(`שגיאה בהעלאת ${file.name}`);
@@ -489,7 +467,7 @@ export const ClientUploadPage = () => {
     const { data, error } = await supabaseClient
       .from("zip_examples")
       .insert({
-        submission_id: submissionId,
+        submission_id: FIXED_SUBMISSION_ID,
         file_name: file.name,
         storage_path: uploadData.path,
       })
@@ -520,11 +498,6 @@ export const ClientUploadPage = () => {
         .remove([file.storagePath]);
     }
     setZipFiles(zipFiles.filter((_, i) => i !== index));
-  };
-
-  const copyLink = () => {
-    navigator.clipboard.writeText(window.location.href);
-    message.success("הקישור הועתק!");
   };
 
   // Build rename table data
@@ -594,27 +567,13 @@ export const ClientUploadPage = () => {
         אנא העלה את הקבצים והנתונים שלך כדי שנוכל להגדיר את האוטומציה עבורך.
       </Paragraph>
 
-      {/* Share link */}
-      <div style={{ textAlign: "center", marginBottom: 32 }}>
-        <Button icon={<LinkOutlined />} onClick={copyLink} type="dashed">
-          העתק קישור לדף זה
-        </Button>
-        {saving && (
-          <Tag
-            icon={<SaveOutlined spin />}
-            color="processing"
-            style={{ marginRight: 8 }}
-          >
+      {saving && (
+        <div style={{ textAlign: "center", marginBottom: 16 }}>
+          <Tag icon={<SaveOutlined spin />} color="processing">
             שומר...
           </Tag>
-        )}
-        <Paragraph
-          type="secondary"
-          style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}
-        >
-          כל שינוי נשמר אוטומטית. שתף את הקישור כדי שאחרים יוכלו לצפות בדף זה.
-        </Paragraph>
-      </div>
+        </div>
+      )}
 
       {/* הוראות */}
       <Alert
@@ -622,7 +581,8 @@ export const ClientUploadPage = () => {
         description={
           <div>
             <Paragraph style={{ marginBottom: 8 }}>
-              אנא מלא את כל הסעיפים הבאים כדי לעזור לנו להגדיר את האוטומציה:
+              אנא מלא את כל הסעיפים הבאים כדי לעזור לנו להגדיר את האוטומציה.
+              כל שינוי נשמר אוטומטית.
             </Paragraph>
             <ol style={{ paddingRight: 20, paddingLeft: 0, marginBottom: 0 }}>
               <li>
