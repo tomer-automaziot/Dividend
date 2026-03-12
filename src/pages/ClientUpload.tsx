@@ -674,9 +674,8 @@ export const ClientUploadPage = () => {
           <div style={{ marginTop: 8 }}>
             <Upload
               multiple
-              beforeUpload={(file) => {
-                handleGeneralFileUpload(file);
-                return false;
+              customRequest={({ file }) => {
+                handleGeneralFileUpload(file as File);
               }}
               showUploadList={false}
             >
@@ -751,9 +750,8 @@ export const ClientUploadPage = () => {
               </Text>
               <Upload
                 multiple
-                beforeUpload={(file) => {
-                  handleCompanyFileUpload(company.id!, company.name, file);
-                  return false;
+                customRequest={({ file }) => {
+                  handleCompanyFileUpload(company.id!, company.name, file as File);
                 }}
                 showUploadList={false}
               >
@@ -867,9 +865,8 @@ export const ClientUploadPage = () => {
         />
 
         <Upload
-          beforeUpload={(file) => {
-            handleZipUpload(file);
-            return false;
+          customRequest={({ file }) => {
+            handleZipUpload(file as File);
           }}
           showUploadList={false}
           accept=".zip,.rar,.7z"
