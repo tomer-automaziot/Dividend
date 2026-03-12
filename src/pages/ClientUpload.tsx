@@ -28,9 +28,13 @@ import { supabaseClient } from "../supabaseClient";
 const { Title, Paragraph, Text } = Typography;
 const { Panel } = Collapse;
 
-// Sanitize file/folder names for Supabase Storage (no Hebrew, no spaces)
-const sanitizePath = (name: string) =>
-  encodeURIComponent(name).replace(/%20/g, "_");
+// Sanitize file names for Supabase Storage - only allow ASCII alphanumeric, dots, hyphens, underscores
+const sanitizeFileName = (name: string) => {
+  const ext = name.lastIndexOf(".") >= 0 ? name.slice(name.lastIndexOf(".")) : "";
+  const base = name.slice(0, name.length - ext.length);
+  const safe = base.replace(/[^a-zA-Z0-9._-]/g, "_").replace(/_+/g, "_");
+  return (safe || "file") + ext;
+};
 
 // Single fixed submission ID - no sessions needed
 const FIXED_SUBMISSION_ID = "fdcdfcd9-4147-4687-b07b-99d100df9d70";
@@ -237,7 +241,7 @@ export const ClientUploadPage = () => {
   };
 
   const handleGeneralFileUpload = async (file: File) => {
-    const path = `general/${sanitizePath(file.name)}`;
+    const path = `general/${sanitizeFileName(file.name)}`;
     const { data: uploadData, error: uploadError } =
       await supabaseClient.storage
         .from("initial-files-upload")
@@ -317,7 +321,7 @@ export const ClientUploadPage = () => {
     file: File
   ) => {
     console.log("[CompanyUpload] Starting upload:", { companyId, companyName, fileName: file.name, fileSize: file.size });
-    const path = `companies/${sanitizePath(companyName)}/${sanitizePath(file.name)}`;
+    const path = `companies/${companyId}/${sanitizeFileName(file.name)}`;
     const { data: uploadData, error: uploadError } =
       await supabaseClient.storage
         .from("initial-files-upload")
@@ -471,7 +475,7 @@ export const ClientUploadPage = () => {
 
   // --- Zip files ---
   const handleZipUpload = async (file: File) => {
-    const path = `zip/${sanitizePath(file.name)}`;
+    const path = `zip/${sanitizeFileName(file.name)}`;
     const { data: uploadData, error: uploadError } =
       await supabaseClient.storage
         .from("initial-files-upload")
