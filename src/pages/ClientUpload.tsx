@@ -28,6 +28,10 @@ import { supabaseClient } from "../supabaseClient";
 const { Title, Paragraph, Text } = Typography;
 const { Panel } = Collapse;
 
+// Sanitize file/folder names for Supabase Storage (no Hebrew, no spaces)
+const sanitizePath = (name: string) =>
+  encodeURIComponent(name).replace(/%20/g, "_");
+
 // Single fixed submission ID - no sessions needed
 const FIXED_SUBMISSION_ID = "fdcdfcd9-4147-4687-b07b-99d100df9d70";
 
@@ -233,7 +237,7 @@ export const ClientUploadPage = () => {
   };
 
   const handleGeneralFileUpload = async (file: File) => {
-    const path = `general/${file.name}`;
+    const path = `general/${sanitizePath(file.name)}`;
     const { data: uploadData, error: uploadError } =
       await supabaseClient.storage
         .from("initial-files-upload")
@@ -313,7 +317,7 @@ export const ClientUploadPage = () => {
     file: File
   ) => {
     console.log("[CompanyUpload] Starting upload:", { companyId, companyName, fileName: file.name, fileSize: file.size });
-    const path = `companies/${companyName}/${file.name}`;
+    const path = `companies/${sanitizePath(companyName)}/${sanitizePath(file.name)}`;
     const { data: uploadData, error: uploadError } =
       await supabaseClient.storage
         .from("initial-files-upload")
@@ -467,7 +471,7 @@ export const ClientUploadPage = () => {
 
   // --- Zip files ---
   const handleZipUpload = async (file: File) => {
-    const path = `zip/${file.name}`;
+    const path = `zip/${sanitizePath(file.name)}`;
     const { data: uploadData, error: uploadError } =
       await supabaseClient.storage
         .from("initial-files-upload")
