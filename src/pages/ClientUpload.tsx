@@ -51,37 +51,6 @@ interface FileRename {
   sourceFileId?: string;
 }
 
-const openFilePicker = (
-  onFiles: (files: File[]) => void,
-  options?: { multiple?: boolean; accept?: string }
-) => {
-  const input = document.createElement("input");
-  input.type = "file";
-  input.multiple = options?.multiple ?? false;
-  if (options?.accept) input.accept = options.accept;
-  input.style.display = "none";
-  document.body.appendChild(input);
-  input.onchange = () => {
-    const files = input.files;
-    if (files && files.length > 0) {
-      onFiles(Array.from(files));
-    }
-    document.body.removeChild(input);
-  };
-  // Clean up if user cancels
-  window.addEventListener(
-    "focus",
-    () => {
-      setTimeout(() => {
-        if (document.body.contains(input)) {
-          document.body.removeChild(input);
-        }
-      }, 500);
-    },
-    { once: true }
-  );
-  input.click();
-};
 
 export const ClientUploadPage = () => {
   const [loading, setLoading] = useState(true);
@@ -103,6 +72,14 @@ export const ClientUploadPage = () => {
 
   // Save timer ref for debounced rename saves
   const renameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // File input refs
+  const generalFileInputRef = useRef<HTMLInputElement>(null);
+  const companyFileInputRef = useRef<HTMLInputElement>(null);
+  const zipFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Track which company is currently uploading
+  const activeCompanyRef = useRef<{ id: string; name: string } | null>(null);
 
   // --- Load data on mount ---
   useEffect(() => {
@@ -335,6 +312,7 @@ export const ClientUploadPage = () => {
     companyName: string,
     file: File
   ) => {
+    console.log("[CompanyUpload] Starting upload:", { companyId, companyName, fileName: file.name, fileSize: file.size });
     const path = `companies/${companyName}/${file.name}`;
     const { data: uploadData, error: uploadError } =
       await supabaseClient.storage
@@ -342,9 +320,11 @@ export const ClientUploadPage = () => {
         .upload(path, file, { upsert: true });
 
     if (uploadError) {
+      console.error("[CompanyUpload] Storage upload error:", uploadError);
       message.error(`שגיאה בהעלאת ${file.name}`);
       return false;
     }
+    console.log("[CompanyUpload] Storage upload success:", uploadData.path);
 
     const { data, error } = await supabaseClient
       .from("company_files")
@@ -358,9 +338,11 @@ export const ClientUploadPage = () => {
       .single();
 
     if (error) {
+      console.error("[CompanyUpload] DB insert error:", error);
       message.error("שגיאה בשמירת הקובץ");
       return false;
     }
+    console.log("[CompanyUpload] DB insert success:", data.id);
 
     setCompanies((prev) =>
       prev.map((c) =>
@@ -703,14 +685,22 @@ export const ClientUploadPage = () => {
         <div>
           <Text strong>העלאת קבצים לדוגמה עבור התיקייה הכללית:</Text>
           <div style={{ marginTop: 8 }}>
+            <input
+              type="file"
+              multiple
+              ref={generalFileInputRef}
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const files = e.target.files;
+                if (files && files.length > 0) {
+                  Array.from(files).forEach((f) => handleGeneralFileUpload(f));
+                }
+                e.target.value = "";
+              }}
+            />
             <Button
               icon={<UploadOutlined />}
-              onClick={() =>
-                openFilePicker(
-                  (files) => files.forEach((f) => handleGeneralFileUpload(f)),
-                  { multiple: true }
-                )
-              }
+              onClick={() => generalFileInputRef.current?.click()}
             >
               לחץ לבחירת קבצים
             </Button>
@@ -751,6 +741,23 @@ export const ClientUploadPage = () => {
           </Space.Compact>
         </div>
 
+        <input
+          type="file"
+          multiple
+          ref={companyFileInputRef}
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const files = e.target.files;
+            const company = activeCompanyRef.current;
+            if (files && files.length > 0 && company) {
+              Array.from(files).forEach((f) =>
+                handleCompanyFileUpload(company.id, company.name, f)
+              );
+            }
+            e.target.value = "";
+          }}
+        />
+
         {companies.length === 0 && (
           <Paragraph type="secondary" style={{ textAlign: "center" }}>
             עדיין לא נוספו חברות ביטוח. הוסף חברה למעלה כדי להתחיל.
@@ -784,15 +791,8 @@ export const ClientUploadPage = () => {
               <Button
                 icon={<UploadOutlined />}
                 onClick={() => {
-                  const compId = company.id!;
-                  const compName = company.name;
-                  openFilePicker(
-                    (files) =>
-                      files.forEach((f) =>
-                        handleCompanyFileUpload(compId, compName, f)
-                      ),
-                    { multiple: true }
-                  );
+                  activeCompanyRef.current = { id: company.id!, name: company.name };
+                  companyFileInputRef.current?.click();
                 }}
               >
                 לחץ לבחירת קבצים
@@ -904,15 +904,23 @@ export const ClientUploadPage = () => {
           style={{ marginBottom: 16 }}
         />
 
+        <input
+          type="file"
+          accept=".zip,.rar,.7z"
+          ref={zipFileInputRef}
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const files = e.target.files;
+            if (files && files.length > 0) {
+              Array.from(files).forEach((f) => handleZipUpload(f));
+            }
+            e.target.value = "";
+          }}
+        />
         <Button
           icon={<UploadOutlined />}
           size="large"
-          onClick={() =>
-            openFilePicker(
-              (files) => files.forEach((f) => handleZipUpload(f)),
-              { accept: ".zip,.rar,.7z" }
-            )
-          }
+          onClick={() => zipFileInputRef.current?.click()}
         >
           לחץ להעלאת קובץ ZIP
         </Button>
