@@ -4,7 +4,6 @@ import {
   Card,
   Input,
   Button,
-  Upload,
   Space,
   Divider,
   Alert,
@@ -672,15 +671,23 @@ export const ClientUploadPage = () => {
         <div>
           <Text strong>העלאת קבצים לדוגמה עבור התיקייה הכללית:</Text>
           <div style={{ marginTop: 8 }}>
-            <Upload
-              multiple
-              customRequest={({ file }) => {
-                handleGeneralFileUpload(file as File);
+            <Button
+              icon={<UploadOutlined />}
+              onClick={() => {
+                const input = document.createElement("input");
+                input.type = "file";
+                input.multiple = true;
+                input.onchange = (e) => {
+                  const files = (e.target as HTMLInputElement).files;
+                  if (files) {
+                    Array.from(files).forEach((f) => handleGeneralFileUpload(f));
+                  }
+                };
+                input.click();
               }}
-              showUploadList={false}
             >
-              <Button icon={<UploadOutlined />}>לחץ לבחירת קבצים</Button>
-            </Upload>
+              לחץ לבחירת קבצים
+            </Button>
           </div>
         </div>
       </Card>
@@ -748,15 +755,27 @@ export const ClientUploadPage = () => {
               <Text strong style={{ display: "block", marginBottom: 8 }}>
                 העלאת קבצים לדוגמה עבור "{company.name}":
               </Text>
-              <Upload
-                multiple
-                customRequest={({ file }) => {
-                  handleCompanyFileUpload(company.id!, company.name, file as File);
+              <Button
+                icon={<UploadOutlined />}
+                onClick={() => {
+                  const compId = company.id!;
+                  const compName = company.name;
+                  const input = document.createElement("input");
+                  input.type = "file";
+                  input.multiple = true;
+                  input.onchange = (e) => {
+                    const files = (e.target as HTMLInputElement).files;
+                    if (files) {
+                      Array.from(files).forEach((f) =>
+                        handleCompanyFileUpload(compId, compName, f)
+                      );
+                    }
+                  };
+                  input.click();
                 }}
-                showUploadList={false}
               >
-                <Button icon={<UploadOutlined />}>לחץ לבחירת קבצים</Button>
-              </Upload>
+                לחץ לבחירת קבצים
+              </Button>
 
               {company.files.length > 0 && (
                 <div style={{ marginTop: 12 }}>
@@ -864,17 +883,24 @@ export const ClientUploadPage = () => {
           style={{ marginBottom: 16 }}
         />
 
-        <Upload
-          customRequest={({ file }) => {
-            handleZipUpload(file as File);
+        <Button
+          icon={<UploadOutlined />}
+          size="large"
+          onClick={() => {
+            const input = document.createElement("input");
+            input.type = "file";
+            input.accept = ".zip,.rar,.7z";
+            input.onchange = (e) => {
+              const files = (e.target as HTMLInputElement).files;
+              if (files) {
+                Array.from(files).forEach((f) => handleZipUpload(f));
+              }
+            };
+            input.click();
           }}
-          showUploadList={false}
-          accept=".zip,.rar,.7z"
         >
-          <Button icon={<UploadOutlined />} size="large">
-            לחץ להעלאת קובץ ZIP
-          </Button>
-        </Upload>
+          לחץ להעלאת קובץ ZIP
+        </Button>
 
         {zipFiles.length > 0 && (
           <div style={{ marginTop: 12 }}>
