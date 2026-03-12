@@ -299,11 +299,12 @@ export const ClientUploadPage = () => {
     );
   };
 
-  const handleCompanyFileUpload = async (companyIndex: number, file: File) => {
-    const company = companies[companyIndex];
-    if (!company.id) return false;
-
-    const path = `companies/${company.name}/${file.name}`;
+  const handleCompanyFileUpload = async (
+    companyId: string,
+    companyName: string,
+    file: File
+  ) => {
+    const path = `companies/${companyName}/${file.name}`;
     const { data: uploadData, error: uploadError } =
       await supabaseClient.storage
         .from("initial-files-upload")
@@ -317,7 +318,7 @@ export const ClientUploadPage = () => {
     const { data, error } = await supabaseClient
       .from("company_files")
       .insert({
-        company_id: company.id,
+        company_id: companyId,
         submission_id: FIXED_SUBMISSION_ID,
         file_name: file.name,
         storage_path: uploadData.path,
@@ -330,44 +331,44 @@ export const ClientUploadPage = () => {
       return false;
     }
 
-    setCompanies((prev) => {
-      const updated = [...prev];
-      updated[companyIndex] = {
-        ...updated[companyIndex],
-        files: [
-          ...updated[companyIndex].files,
-          { id: data.id, name: file.name, storagePath: uploadData.path },
-        ],
-      };
-      return updated;
-    });
+    setCompanies((prev) =>
+      prev.map((c) =>
+        c.id === companyId
+          ? {
+              ...c,
+              files: [
+                ...c.files,
+                { id: data.id, name: file.name, storagePath: uploadData.path },
+              ],
+            }
+          : c
+      )
+    );
     message.success(`${file.name} הועלה בהצלחה`);
     return false;
   };
 
-  const removeCompanyFile = async (companyIndex: number, fileIndex: number) => {
-    const file = companies[companyIndex].files[fileIndex];
-    if (file.id) {
-      await supabaseClient.from("company_files").delete().eq("id", file.id);
+  const removeCompanyFile = async (companyId: string, fileId: string, storagePath?: string) => {
+    if (fileId) {
+      await supabaseClient.from("company_files").delete().eq("id", fileId);
       await supabaseClient
         .from("field_changes")
         .delete()
-        .eq("company_file_id", file.id);
+        .eq("company_file_id", fileId);
     }
-    if (file.storagePath) {
+    if (storagePath) {
       await supabaseClient.storage
         .from("initial-files-upload")
-        .remove([file.storagePath]);
+        .remove([storagePath]);
     }
-    setCompanies((prev) => {
-      const updated = [...prev];
-      updated[companyIndex] = {
-        ...updated[companyIndex],
-        files: updated[companyIndex].files.filter((_, i) => i !== fileIndex),
-      };
-      return updated;
-    });
-    setFileRenames(fileRenames.filter((r) => r.sourceFileId !== file.id));
+    setCompanies((prev) =>
+      prev.map((c) =>
+        c.id === companyId
+          ? { ...c, files: c.files.filter((f) => f.id !== fileId) }
+          : c
+      )
+    );
+    setFileRenames((prev) => prev.filter((r) => r.sourceFileId !== fileId));
   };
 
   // --- File Renames (step 3) ---
@@ -751,7 +752,7 @@ export const ClientUploadPage = () => {
               <Upload
                 multiple
                 beforeUpload={(file) => {
-                  handleCompanyFileUpload(companyIndex, file);
+                  handleCompanyFileUpload(company.id!, company.name, file);
                   return false;
                 }}
                 showUploadList={false}
@@ -765,7 +766,7 @@ export const ClientUploadPage = () => {
                     <Tag
                       key={file.id || fileIndex}
                       closable
-                      onClose={() => removeCompanyFile(companyIndex, fileIndex)}
+                      onClose={() => removeCompanyFile(company.id!, file.id, file.storagePath)}
                       color="green"
                       style={{
                         marginBottom: 8,
