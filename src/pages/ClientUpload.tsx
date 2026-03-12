@@ -51,6 +51,38 @@ interface FileRename {
   sourceFileId?: string;
 }
 
+const openFilePicker = (
+  onFiles: (files: File[]) => void,
+  options?: { multiple?: boolean; accept?: string }
+) => {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.multiple = options?.multiple ?? false;
+  if (options?.accept) input.accept = options.accept;
+  input.style.display = "none";
+  document.body.appendChild(input);
+  input.onchange = () => {
+    const files = input.files;
+    if (files && files.length > 0) {
+      onFiles(Array.from(files));
+    }
+    document.body.removeChild(input);
+  };
+  // Clean up if user cancels
+  window.addEventListener(
+    "focus",
+    () => {
+      setTimeout(() => {
+        if (document.body.contains(input)) {
+          document.body.removeChild(input);
+        }
+      }, 500);
+    },
+    { once: true }
+  );
+  input.click();
+};
+
 export const ClientUploadPage = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -673,18 +705,12 @@ export const ClientUploadPage = () => {
           <div style={{ marginTop: 8 }}>
             <Button
               icon={<UploadOutlined />}
-              onClick={() => {
-                const input = document.createElement("input");
-                input.type = "file";
-                input.multiple = true;
-                input.onchange = (e) => {
-                  const files = (e.target as HTMLInputElement).files;
-                  if (files) {
-                    Array.from(files).forEach((f) => handleGeneralFileUpload(f));
-                  }
-                };
-                input.click();
-              }}
+              onClick={() =>
+                openFilePicker(
+                  (files) => files.forEach((f) => handleGeneralFileUpload(f)),
+                  { multiple: true }
+                )
+              }
             >
               לחץ לבחירת קבצים
             </Button>
@@ -760,18 +786,13 @@ export const ClientUploadPage = () => {
                 onClick={() => {
                   const compId = company.id!;
                   const compName = company.name;
-                  const input = document.createElement("input");
-                  input.type = "file";
-                  input.multiple = true;
-                  input.onchange = (e) => {
-                    const files = (e.target as HTMLInputElement).files;
-                    if (files) {
-                      Array.from(files).forEach((f) =>
+                  openFilePicker(
+                    (files) =>
+                      files.forEach((f) =>
                         handleCompanyFileUpload(compId, compName, f)
-                      );
-                    }
-                  };
-                  input.click();
+                      ),
+                    { multiple: true }
+                  );
                 }}
               >
                 לחץ לבחירת קבצים
@@ -886,18 +907,12 @@ export const ClientUploadPage = () => {
         <Button
           icon={<UploadOutlined />}
           size="large"
-          onClick={() => {
-            const input = document.createElement("input");
-            input.type = "file";
-            input.accept = ".zip,.rar,.7z";
-            input.onchange = (e) => {
-              const files = (e.target as HTMLInputElement).files;
-              if (files) {
-                Array.from(files).forEach((f) => handleZipUpload(f));
-              }
-            };
-            input.click();
-          }}
+          onClick={() =>
+            openFilePicker(
+              (files) => files.forEach((f) => handleZipUpload(f)),
+              { accept: ".zip,.rar,.7z" }
+            )
+          }
         >
           לחץ להעלאת קובץ ZIP
         </Button>
