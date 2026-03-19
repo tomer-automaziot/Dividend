@@ -22,6 +22,7 @@ import {
   BankOutlined,
   SwapOutlined,
   SaveOutlined,
+  DownloadOutlined,
 } from "@ant-design/icons";
 import { supabaseClient } from "../supabaseClient";
 
@@ -59,6 +60,30 @@ interface FileRename {
   sourceFileId?: string;
 }
 
+
+const handleDownloadFile = async (storagePath: string, fileName: string) => {
+  try {
+    const { data, error } = await supabaseClient.storage
+      .from("initial-files-upload")
+      .download(storagePath);
+
+    if (error || !data) {
+      message.error(`שגיאה בהורדת ${fileName}`);
+      return;
+    }
+
+    const url = URL.createObjectURL(data);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch {
+    message.error(`שגיאה בהורדת ${fileName}`);
+  }
+};
 
 export const ClientUploadPage = () => {
   const [loading, setLoading] = useState(true);
@@ -670,19 +695,28 @@ export const ClientUploadPage = () => {
           {generalFileNames.length > 0 && (
             <div style={{ marginTop: 12 }}>
               {generalFileNames.map((file, index) => (
-                <Tag
-                  key={file.id || index}
-                  closable
-                  onClose={() => removeGeneralFile(index)}
-                  color={file.storagePath ? "green" : "blue"}
-                  style={{
-                    marginBottom: 8,
-                    fontSize: 14,
-                    padding: "4px 10px",
-                  }}
-                >
-                  {file.storagePath && <UploadOutlined />} {file.name}
-                </Tag>
+                <Space key={file.id || index} size={4} style={{ marginBottom: 8 }}>
+                  <Tag
+                    closable
+                    onClose={() => removeGeneralFile(index)}
+                    color={file.storagePath ? "green" : "blue"}
+                    style={{
+                      fontSize: 14,
+                      padding: "4px 10px",
+                      marginBottom: 0,
+                    }}
+                  >
+                    {file.storagePath && <UploadOutlined />} {file.name}
+                  </Tag>
+                  {file.storagePath && (
+                    <Button
+                      type="link"
+                      size="small"
+                      icon={<DownloadOutlined />}
+                      onClick={() => handleDownloadFile(file.storagePath!, file.name)}
+                    />
+                  )}
+                </Space>
               ))}
             </div>
           )}
@@ -809,19 +843,28 @@ export const ClientUploadPage = () => {
               {company.files.length > 0 && (
                 <div style={{ marginTop: 12 }}>
                   {company.files.map((file, fileIndex) => (
-                    <Tag
-                      key={file.id || fileIndex}
-                      closable
-                      onClose={() => removeCompanyFile(company.id!, file.id, file.storagePath)}
-                      color="green"
-                      style={{
-                        marginBottom: 8,
-                        fontSize: 14,
-                        padding: "4px 10px",
-                      }}
-                    >
-                      <UploadOutlined /> {file.name}
-                    </Tag>
+                    <Space key={file.id || fileIndex} size={4} style={{ marginBottom: 8 }}>
+                      <Tag
+                        closable
+                        onClose={() => removeCompanyFile(company.id!, file.id, file.storagePath)}
+                        color="green"
+                        style={{
+                          fontSize: 14,
+                          padding: "4px 10px",
+                          marginBottom: 0,
+                        }}
+                      >
+                        <UploadOutlined /> {file.name}
+                      </Tag>
+                      {file.storagePath && (
+                        <Button
+                          type="link"
+                          size="small"
+                          icon={<DownloadOutlined />}
+                          onClick={() => handleDownloadFile(file.storagePath!, file.name)}
+                        />
+                      )}
+                    </Space>
                   ))}
                 </div>
               )}
@@ -936,19 +979,28 @@ export const ClientUploadPage = () => {
         {zipFiles.length > 0 && (
           <div style={{ marginTop: 12 }}>
             {zipFiles.map((file, index) => (
-              <Tag
-                key={file.id || index}
-                closable
-                onClose={() => removeZipFile(index)}
-                color="green"
-                style={{
-                  marginBottom: 8,
-                  fontSize: 14,
-                  padding: "4px 10px",
-                }}
-              >
-                <FileZipOutlined /> {file.name}
-              </Tag>
+              <Space key={file.id || index} size={4} style={{ marginBottom: 8 }}>
+                <Tag
+                  closable
+                  onClose={() => removeZipFile(index)}
+                  color="green"
+                  style={{
+                    fontSize: 14,
+                    padding: "4px 10px",
+                    marginBottom: 0,
+                  }}
+                >
+                  <FileZipOutlined /> {file.name}
+                </Tag>
+                {file.storagePath && (
+                  <Button
+                    type="link"
+                    size="small"
+                    icon={<DownloadOutlined />}
+                    onClick={() => handleDownloadFile(file.storagePath!, file.name)}
+                  />
+                )}
+              </Space>
             ))}
           </div>
         )}
